@@ -14,7 +14,7 @@ st.title("Baichuan-13B-Chat")
 
 @st.cache_resource
 def init_model():
-    model_name = "baichuan-inc/Baichuan-13B-Chat"
+    model_name = "/mnt/model/Baichuan-13B-Chat"
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         torch_dtype=torch.float16,
