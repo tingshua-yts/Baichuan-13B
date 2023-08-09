@@ -553,13 +553,19 @@ class BaichuanForCausalLM(BaichuanPreTrainedModel):
         return self
 
     def _build_chat_input(self, tokenizer, messages: List[dict], max_new_tokens: int=0):
+        # 计算max new tokens和max input tokens
         max_new_tokens = max_new_tokens or self.generation_config.max_new_tokens
         max_input_tokens = self.config.model_max_length - max_new_tokens
         max_input_tokens = max(self.config.model_max_length // 2, max_input_tokens)
+
         total_input, round_input = [], []
+        # 遍历所有message，这user和assistant的content，在组合过程中药在content前面添加对应的user_token_id或asistant_token_id
         for i, message in enumerate(messages[::-1]):
+            # 对content进行分词
             content_tokens = tokenizer.encode(message['content'])
+            # 处理user 输入的内容
             if message['role'] == 'user':
+                # 在content前面加上user_token_id
                 round_input = [self.generation_config.user_token_id] + content_tokens + round_input
                 if total_input and len(total_input) + len(round_input) > max_input_tokens:
                     break
@@ -569,13 +575,17 @@ class BaichuanForCausalLM(BaichuanPreTrainedModel):
                         break
                     else:
                         round_input = []
+            # 处理assistant输出的内容
             elif message['role'] == 'assistant':
+                # 在content前面加上assistant_token_id
                 round_input = [
                     self.generation_config.assistant_token_id
                 ] + content_tokens + round_input
             else:
                 raise ValueError(f"message role not supported yet: {message['role']}")
         total_input = total_input[-max_input_tokens:]  # truncate left
+
+        # 在结尾处要添加一个assistant_token_id
         total_input.append(self.generation_config.assistant_token_id)
         total_input = torch.LongTensor([total_input]).to(self.device)
         return total_input
@@ -584,21 +594,29 @@ class BaichuanForCausalLM(BaichuanPreTrainedModel):
     def chat(self, tokenizer, messages: List[dict], stream=False,
              generation_config: Optional[GenerationConfig]=None):
         generation_config = generation_config or self.generation_config
+        # 通过message来构建input_ids
         input_ids = self._build_chat_input(tokenizer, messages, generation_config.max_new_tokens)
         if stream:
+            # 处理stream场景，返回一个stream generator
             from transformers_stream_generator.main import NewGenerationMixin, StreamGenerationConfig
+            # 将模型的generate更改为支持stream的generate
             self.__class__.generate = NewGenerationMixin.generate
             self.__class__.sample_stream = NewGenerationMixin.sample_stream
+            # 创建StreamConfig
             stream_config = StreamGenerationConfig(**generation_config.to_dict(), do_stream=True)
 
+            # 定义一个stream的generator
             def stream_generator():
                 outputs = []
+                # 该generator会不断的调用NewGenerationMixin.generate，可以理解为stream_generator返回的是一个list
+                # 通过源码分析可知，每次返回的是一个token
                 for token in self.generate(input_ids, generation_config=stream_config):
                     outputs.append(token.item())
                     yield tokenizer.decode(outputs, skip_special_tokens=True)
 
             return stream_generator()
         else:
+            # 没有使用stream的场景
             self.__class__.generate = PreTrainedModel.generate  # disable stream
             outputs = self.generate(input_ids, generation_config=generation_config)
             response = tokenizer.decode(outputs[0][len(input_ids[0]):], skip_special_tokens=True)

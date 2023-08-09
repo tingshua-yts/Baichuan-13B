@@ -64,7 +64,7 @@ def dequant4(qweight: torch.Tensor, scale: torch.Tensor, input: torch.Tensor):
     num_chan_int = qweight.size(1)
     # 4bit
     num_chan_fp16 = num_chan_int * 8
-    
+
     out = torch.empty((num_row, num_chan_fp16), dtype=input.dtype, device=qweight.device)
 
     blockDim = (128, 1, 1)
@@ -75,7 +75,7 @@ def dequant4(qweight: torch.Tensor, scale: torch.Tensor, input: torch.Tensor):
        	    blockDim,
             0,
             stream,
-            [ctypes.c_void_p(out.data_ptr()), ctypes.c_void_p(qweight.data_ptr()), 
+            [ctypes.c_void_p(out.data_ptr()), ctypes.c_void_p(qweight.data_ptr()),
             ctypes.c_void_p(scale.data_ptr()), ctypes.c_int32(num_row), ctypes.c_int32(num_chan_int), ctypes.c_int32(num_chan_fp16)],
         )
     elif input.dtype == torch.float16:
@@ -93,29 +93,33 @@ class QLinear(torch.nn.Module):
     def __init__(self, bits: int, weight: torch.Tensor, bias=None):
         super().__init__()
         self.quant_bits = bits
+        # 计算scale
         self.scale = weight.abs().max(dim=-1).values / ((2 ** (bits - 1)) - 1)
         self.scale = self.scale.to(torch.float32)
         if self.quant_bits == 4:
             self.weight = quant4(weight, self.scale)
         elif self.quant_bits == 8:
+            # 对weight进行scale
             self.weight = torch.round(weight.to(self.scale.dtype) / self.scale[:, None]).to(torch.int8)
         if self.quant_bits == 8:
+            # 进行转置
             self.weight = self.weight.T
         self.bias = None
 
     def forward(self, input):
         if self.quant_bits == 4:
-            assert(input.dtype == torch.bfloat16 or input.dtype == torch.float16)            
+            assert(input.dtype == torch.bfloat16 or input.dtype == torch.float16)
 
         if self.weight.device != input.device:
             self.weight = self.weight.to(input.device)
             self.scale = self.scale.to(input.device)
-        
+
         if self.quant_bits == 4:
             self.scale = self.scale.to(input.dtype)
             rweight = dequant4(self.weight, self.scale, input).T
             output = torch.matmul(input, rweight)
         elif self.quant_bits == 8:
+            # weight恢复scale进行计算
             rweight = self.weight.to(input.dtype) * self.scale.to(input.dtype)
             output = torch.matmul(input, rweight)
         if self.bias is not None:
